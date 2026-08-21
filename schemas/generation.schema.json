@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "GenerationManifest",
+  "type": "object",
+  "required": ["id", "title", "bpm", "bars", "assets"],
+  "properties": {
+    "id": { "type": "string" },
+    "title": { "type": "string" },
+    "prompt": { "type": "string" },
+    "bpm": { "type": "number" },
+    "bars": { "type": "integer" },
+    "assets": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["role", "name", "local_path"],
+        "properties": {
+          "role": { "type": "string" },
+          "name": { "type": "string" },
+          "url": { "type": "string" },
+          "local_path": { "type": "string" }
+        }
+      }
+    }
+  }
+}

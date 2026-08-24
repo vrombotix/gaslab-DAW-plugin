@@ -2,109 +2,186 @@ ardour {
   ["type"] = "EditorHook",
   name = "AI DAW Import Bridge",
   author = "AI DAW Prototype",
-  description = [[Watches for import requests from the AI DAW desktop agent and imports generated WAV stems at the current playhead as new Ardour tracks. Prototype bridge.]],
+  description = [[Watches for AI DAW import requests and imports generated stems as separate tracks.]]
 }
-
-local HOME = os.getenv("HOME") or "/tmp"
-local BRIDGE_DIR = HOME .. "/.local/share/ai-daw-prototype/ardour"
-local REQUEST = BRIDGE_DIR .. "/import.request"
-local STATUS = BRIDGE_DIR .. "/bridge.status"
-local RESULT = BRIDGE_DIR .. "/import.result"
-local tick = 0
-os.execute('mkdir -p "' .. BRIDGE_DIR .. '"')
 
 function signals()
   local s = LuaSignal.Set()
-  s:add({ [LuaSignal.LuaTimerDS] = true })
+  s:add({
+    [LuaSignal.LuaTimerS] = true
+  })
   return s
 end
 
-local function write_status()
-  local f = io.open(STATUS, "w")
-  if not f then return end
-  f:write("ready\n")
-  f:write("session=" .. Session:name() .. "\n")
-  f:write("time=" .. tostring(os.time()) .. "\n")
-  f:close()
-end
-
-local function write_result(ok, text)
-  local f = io.open(RESULT, "w")
-  if not f then return end
-  f:write(ok and "ok\n" or "error\n")
-  f:write(text or "")
-  f:write("\n")
-  f:close()
-end
-
-local function read_request()
-  local f = io.open(REQUEST, "r")
-  if not f then return nil end
-  local assets = {}
-  local generation_id = "unknown"
-  for line in f:lines() do
-    local k, v = line:match("^([^=]+)=(.*)$")
-    if k == "generation_id" then
-      generation_id = v
-    elseif k == "asset" then
-      local name, path = v:match("^([^\t]+)\t(.+)$")
-      if name and path then table.insert(assets, { name = name, path = path }) end
-    end
-  end
-  f:close()
-  return { generation_id = generation_id, assets = assets }
-end
-
-local function import_request(req)
-  if not req or #req.assets == 0 then return false, "No assets in request" end
-  if Session:transport_rolling() then
-    Session:request_stop(true, false, ARDOUR.TransportRequestSource.TRS_UI)
-  end
-
-  local files = ARDOUR.LuaAPI.CppStringVector()
-  for _, asset in ipairs(req.assets) do
-    files:push_back(asset.path)
-  end
-
-  local Editing = LuaAPI.Editing
-  local position = Temporal.timepos_t(Session:transport_sample())
-
-  local ok, err = pcall(function()
-    -- ImportDistinctFiles + ImportAsTrack is Ardour's native "each file as a
-    -- separate new track" operation. All files use the same playhead position.
-    Editor:do_import(
-      files,
-      Editing.ImportDistinctFiles,
-      Editing.ImportAsTrack,
-      ARDOUR.SrcQuality.SrcBest,
-      ARDOUR.MidiTrackNameSource.SMFTrackName,
-      ARDOUR.MidiTempoMapDisposition.SMFTempoIgnore,
-      position,
-      ARDOUR.PluginInfo(),
-      nil,
-      false
-    )
-  end)
-
-  if ok then return true, "Imported " .. tostring(#req.assets) .. " stems" end
-  return false, tostring(err)
-end
-
+-- Everything the returned callback needs must be defined inside factory()
+-- itself: Ardour instantiates factory() as a self-contained unit, so
+-- helper functions/state declared at the file's top level are not
+-- reliably visible from inside it (observed as "attempt to call a table
+-- value" / "attempt to call a nil value" for top-level helpers).
 function factory()
-  return function(signal, ...)
-    tick = tick + 1
-    if tick % 10 == 0 then write_status() end
 
-    local f = io.open(REQUEST, "r")
-    if not f then return end
+  local tick = 0
+  local last_generation_id = ""
+
+  local function get_bridge_dir()
+    local home = os.getenv("HOME") or "/tmp"
+    return home .. "/.local/share/ai-daw-prototype/ardour"
+  end
+
+  local bridge_dir = get_bridge_dir()
+
+  local request_path =
+    bridge_dir .. "/import.request"
+
+  local status_path =
+    bridge_dir .. "/bridge.status"
+
+  local result_path =
+    bridge_dir .. "/import.result"
+
+  local function read_request(path)
+    local f = io.open(path, "r")
+    if not f then
+      return nil
+    end
+
+    local req = {
+      generation_id = "",
+      assets = {}
+    }
+
+    for line in f:lines() do
+      local k, v = string.match(line, "^([^=]+)=(.*)$")
+
+      if k == "generation_id" then
+        req.generation_id = v
+
+      elseif k == "asset" then
+        local name, filepath =
+          string.match(v, "^([^\t]+)\t(.+)$")
+
+        if name and filepath then
+          table.insert(req.assets, {
+            name = name,
+            path = filepath
+          })
+        end
+      end
+    end
+
     f:close()
+    return req
+  end
 
-    local req = read_request()
-    -- Claim the request before importing so the 100ms timer cannot import twice.
-    os.rename(REQUEST, REQUEST .. ".processing")
-    local ok, message = import_request(req)
-    os.remove(REQUEST .. ".processing")
-    write_result(ok, message)
-    write_status()
+  local function write_status(path)
+    local f = io.open(path, "w")
+    if not f then
+      return
+    end
+
+    f:write("ready\n")
+    f:write("session=" .. Session:name() .. "\n")
+    f:write("tick=" .. tostring(tick) .. "\n")
+    f:close()
+  end
+
+  local function write_result(path, ok, message)
+    local f = io.open(path, "w")
+    if not f then
+      return
+    end
+
+    if ok then
+      f:write("ok\n")
+    else
+      f:write("error\n")
+    end
+
+    f:write(message or "")
+    f:write("\n")
+    f:close()
+  end
+
+  local function import_generation(req)
+    if not req then
+      return false, "Invalid request"
+    end
+
+    if #req.assets == 0 then
+      return false, "No assets in request"
+    end
+
+    local files = C.StringVector()
+
+    for _, asset in ipairs(req.assets) do
+      files:push_back(asset.path)
+    end
+
+    local position =
+      Temporal.timepos_t(Session:transport_sample())
+
+    local ok, err = pcall(function()
+
+      Editor:do_import(
+        files,
+        Editing.ImportDistinctFiles,
+        Editing.ImportAsTrack,
+        ARDOUR.SrcQuality.SrcBest,
+        ARDOUR.MidiTrackNameSource.SMFTrackName,
+        ARDOUR.MidiTempoMapDisposition.SMFTempoIgnore,
+        position,
+        ARDOUR.PluginInfo(),
+        ARDOUR.Track(),
+        false
+      )
+
+    end)
+
+    if not ok then
+      return false, tostring(err)
+    end
+
+    return true,
+      "Imported " .. tostring(#req.assets) .. " stems"
+  end
+
+  return function(signal, ...)
+
+    tick = tick + 1
+
+    write_status(status_path)
+
+    local req = read_request(request_path)
+
+    if not req then
+      return
+    end
+
+    if req.generation_id == "" then
+      return
+    end
+
+    -- Prevent importing the same request every timer tick.
+    if req.generation_id == last_generation_id then
+      return
+    end
+
+    local ok, message =
+      import_generation(req)
+
+    -- Only mark this generation as handled once it actually succeeds,
+    -- so a failed import gets retried on the next tick instead of
+    -- being silently skipped forever.
+    if ok then
+      last_generation_id = req.generation_id
+    end
+
+    write_result(
+      result_path,
+      ok,
+      message
+    )
+
+    write_status(status_path)
   end
 end

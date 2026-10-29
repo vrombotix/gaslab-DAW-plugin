@@ -8,3 +8,5 @@ dist/
 *.mp4
 *.webm
 .serena/
+__pycache__/
+*.pyc

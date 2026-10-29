@@ -3,7 +3,7 @@ use std::process::Command;
 use tauri::Manager;
 use tauri_plugin_shell::ShellExt;
 
-mod generation_server;
+mod mock_api;
 
 /// The dev-tree daw-agent build, used when the bundled sidecar is unavailable
 /// (a dev checkout where `scripts/prepare-sidecar.sh` hasn't been run yet).
@@ -91,7 +91,7 @@ async fn install_bridges(app: tauri::AppHandle) {
 }
 
 fn main() {
-    generation_server::spawn();
+    mock_api::spawn();
 
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())

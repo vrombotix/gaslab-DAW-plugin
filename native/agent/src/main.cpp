@@ -472,7 +472,7 @@ std::vector<BridgeInstallResult> installBridges() {
 
 int main(int argc, char** argv) {
   curl_global_init(CURL_GLOBAL_DEFAULT);
-  if (argc < 2) printError("Usage: daw-agent <health|daws|login|logout|songs|generate|download|upload|export|import|launch|install-bridges> ...");
+  if (argc < 2) printError("Usage: daw-agent <health|daws|login|logout|songs|download|upload|export|import|launch|install-bridges> ...");
   const std::string command = argv[1];
 
   try {
@@ -559,16 +559,6 @@ int main(int argc, char** argv) {
       reply.put("ok", true);
       reply.put("user.email", session.email);
       std::cout << jsonString(reply);
-      return 0;
-    }
-
-    if (command == "generate") {
-      const auto session = requireSession();
-      const auto api = apiBase(argc, argv, session);
-      pt::ptree request;
-      request.put("prompt", argValue(argc, argv, "--prompt", "Dark melodic techno"));
-      const auto song = postJson(api + "/v1/generations", session.token, request);
-      std::cout << jsonString(downloadSong(song, api, session.token));
       return 0;
     }
 

@@ -11,15 +11,14 @@ otherwise. Errors are `{"error": "<message shown to the user>"}`.
 | Method | Path | Body | Response |
 |---|---|---|---|
 | `POST` | `/v1/auth/login` | `{"email", "password"}` | `{"token", "user": {"email"}}` - `401` on bad credentials |
-| `GET` | `/v1/songs` | - | `{"songs": [Song]}`, newest first, only the caller's songs |
-| `POST` | `/v1/generations` | `{"prompt"}` | `Song` (generates it and adds it to the caller's songs) |
-| `GET` | `/v1/songs/{id}` | - | `Song` - `404` if it is not the caller's |
+| `GET` | `/v1/songs` | - | `{"songs": [Song]}`: the tracks the caller owns, newest first |
+| `GET` | `/v1/songs/{id}` | - | `Song` - `404` unless the caller owns it |
 | `GET` | `/v1/assets/{filename}` | - | the stem audio (any `url` from `Song.assets`) |
 | `POST` | `/v1/songs/{id}/uploads?filename={name}` | raw audio bytes | `{"upload": Upload}` - `400` bad name/empty, `404` unknown song, `413` too large |
 | `GET` | `/v1/uploads/{id}` | - | the uploaded audio (any `url` from `Song.uploads`) |
 
 ```text
-Song   = { id, title, prompt, bpm, bars, status, created_at,
+Song   = { id, title, owner, bpm, bars, created_at,
            assets:  [{ role, name, filename, url }],
            uploads: [Upload] }
 Upload = { id, filename, size, url, created_at }
@@ -30,5 +29,8 @@ Upload = { id, filename, size, url, created_at }
 - `url`s may be absolute or relative to the API base.
 - `created_at` is Unix seconds. Upload names must end in `.wav`, `.aif`,
   `.aiff`, `.flac` or `.mp3`.
-- Mock only: any email works with password `demo`, and everything is held in
-  memory until the app quits.
+- `owner` is the owning account's email. The app only lists and opens tracks
+  the signed-in user owns; it never generates new ones.
+- Mock only: any email works with password `demo`, every account owns three
+  demo tracks built from the same four stems, and uploads are held in memory
+  until the app quits.

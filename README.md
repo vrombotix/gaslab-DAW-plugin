@@ -1,18 +1,19 @@
 # AI DAW Prototype v0.1
 
-A first end-to-end prototype for a **standalone AI music generation app that can hand generated stems directly to multiple DAWs**.
+A desktop companion for **Gaslab**: it brings the tracks you own into your DAW, and your mix back to Gaslab.
 
 The current prototype implements the shared architecture and adapters for **Ardour, REAPER, Ableton Live, FL Studio and Logic Pro** (see [DAW support](#daw-support)). Ardour 9.x on Linux is the one exercised end to end.
 
 ## What the app does
 
-1. **Sign in** to the music API.
-2. **My songs** lists every song of that user; **Generate** creates a new one from a prompt.
-3. Opening a song downloads its stems to a persistent local folder.
-4. **Import into DAW** hands the stems to whichever DAW has a live bridge. Every DAW can also take them by dragging the stems out of the app.
-5. **Export mix to API**: bounce your mix in the DAW, pick the file, and it is uploaded to that song. In dev mode, Ardour and REAPER can also **render the mix themselves** and upload it in one click.
+1. **Sign in** with a Gaslab account.
+2. **Your tracks** lists the tracks that account owns. The app does not generate music.
+3. Clicking a track downloads its stems and, when a DAW bridge is ready, imports them into that DAW in the same click. Every DAW can also take the stems by dragging them out of the app.
+4. **Export mix**: bounce your mix in the DAW, pick the file, and it is uploaded to that track. In dev mode, Ardour and REAPER can also **render the mix themselves** and upload it in one click.
 
-The API is a stand-in built into the app (any email, password `demo`). It always returns the same four demo stems: Drums, Bass, Synth and Vocals. Its contract - sign-in, song list, download, upload - is in [schemas/api.md](schemas/api.md), so a real backend can replace it without changing the app.
+The API is a stand-in built into the app (any email, password `demo`): every account owns three demo tracks made of the same four stems (Drums, Bass, Synth, Vocals). Its contract - sign-in, owned-track list, download, upload - is in [schemas/api.md](schemas/api.md), so the real Gaslab backend can replace it without changing the app.
+
+The UI uses the Gaslab design system of [Gaslab Rights](https://github.com/WGasLab/gaslab-rightholder-platform) (`apps/rightholders`): its tokens are copied verbatim into `apps/desktop/src/styles.css` (Tailwind v4), with Figtree and Geist Mono bundled and Hugeicons for icons.
 
 ## DAW support
 
@@ -173,7 +174,7 @@ The desktop app starts the built-in mock API on `http://127.0.0.1:8787` itself. 
 
 ```bash
 AI_DAW_PASSWORD=demo ./build/daw-agent login --email you@example.com
-./build/daw-agent generate --prompt "dark techno"
+./build/daw-agent songs
 ```
 
 The session is stored in `session.json` in the data folder, readable only by you. Downloaded songs are stored under:
@@ -241,11 +242,10 @@ The app should open as a native desktop window.
 Workflow:
 
 1. Sign in (built-in mock: any email, password `demo`).
-2. Type a prompt and click **Generate**, or click **Open** on a song in **My songs**.
-3. Open an Ardour session and enable the bridge; the app shows `bridge ready`.
-4. Put Ardour's playhead where you want the song and click **Import into Ardour**. The bridge imports the stems at the playhead as separate tracks.
-5. Mix, then bounce/export the mix from the DAW.
-6. Click **Export mix to API** and pick the bounced file. It is uploaded to the song and listed under it.
+2. Open an Ardour session and enable the bridge; the app shows `Bridge ready`.
+3. Put Ardour's playhead where you want the track and click **Import into Ardour** on a track in **Your tracks**. The bridge imports the stems at the playhead as separate tracks.
+4. Mix, then bounce/export the mix from the DAW.
+5. Click **Export mix** and pick the bounced file. It is uploaded to the track and listed under it.
 
 ---
 
@@ -274,13 +274,12 @@ AI_DAW_DEV=1 ./build/daw-agent launch --daw ardour
 ```bash
 AI_DAW_PASSWORD=demo ./build/daw-agent login --email you@example.com
 ./build/daw-agent songs
-./build/daw-agent generate --prompt "Berlin warehouse techno"
 ./build/daw-agent download --song song-1
 ./build/daw-agent upload --song song-1 --file ~/Desktop/mix.wav
 ./build/daw-agent logout
 ```
 
-`generate` and `download` print a `manifest_path`. Use it for a manual import test:
+`download` prints a `manifest_path`. Use it for a manual import test:
 
 ```bash
 AI_DAW_DEV=1 ./build/daw-agent import --daw ardour --manifest /absolute/path/to/generation.json
@@ -332,7 +331,7 @@ ai-daw-prototype/
 
 # Why this structure
 
-The UI never calls Ardour-specific functionality. It only asks the C++ agent to perform generic operations such as `generate`, `list DAWs` and `import generation`.
+The UI never calls Ardour-specific functionality. It only asks the C++ agent to perform generic operations such as `songs`, `daws` and `import`.
 
 Future adapters can map the same conceptual operation differently:
 

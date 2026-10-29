@@ -25,6 +25,9 @@ const STEMS: &[Stem] = &[
 
 /// Mock accounts: any email signs in with this password.
 const DEMO_PASSWORD: &str = "demo";
+/// The tracks (title, BPM) every mock account owns, newest first, all built
+/// from the bundled demo stems. The real API returns the user's own tracks.
+const DEMO_TRACKS: &[(&str, u32)] = &[("Night Drive", 124), ("Warehouse Pressure", 130), ("Sunday Lofi", 86)];
 // ponytail: uploads live in memory, so cap them; the real API streams to storage.
 const MAX_UPLOAD_BYTES: u64 = 500 * 1024 * 1024;
 const UPLOAD_EXTENSIONS: &[&str] = &["wav", "aif", "aiff", "flac", "mp3"];
@@ -32,7 +35,7 @@ const UPLOAD_EXTENSIONS: &[&str] = &["wav", "aif", "aiff", "flac", "mp3"];
 #[derive(Default)]
 struct State {
     sessions: HashMap<String, String>,              // bearer token -> email
-    songs: HashMap<String, Vec<Value>>,             // email -> songs, oldest first
+    songs: HashMap<String, Vec<Value>>,             // owner email -> songs, newest first
     uploads: HashMap<String, (String, Vec<u8>)>,    // upload id -> (owner email, bytes)
     counter: u64,
 }
@@ -51,7 +54,7 @@ type Reply = Response<Cursor<Vec<u8>>>;
 pub fn spawn() {
     thread::spawn(|| match Server::http("127.0.0.1:8787") {
         Ok(server) => serve(server),
-        Err(e) => eprintln!("generation_server: failed to bind 127.0.0.1:8787: {e}"),
+        Err(e) => eprintln!("mock_api: failed to bind 127.0.0.1:8787: {e}"),
     });
 }
 
@@ -107,11 +110,7 @@ fn route(request: &mut Request, state: &mut State) -> Reply {
         return error(401, "Sign in required");
     };
     match (&method, segments.as_slice()) {
-        (Method::Get, ["v1", "songs"]) => {
-            let songs: Vec<&Value> = state.songs.get(&email).map(|s| s.iter().rev().collect()).unwrap_or_default();
-            json_response(200, json!({ "songs": songs }))
-        }
-        (Method::Post, ["v1", "generations"]) => generate(&email, &read_text(request), state),
+        (Method::Get, ["v1", "songs"]) => json_response(200, json!({ "songs": state.songs.get(&email).cloned().unwrap_or_default() })),
         (Method::Get, ["v1", "songs", id]) => match find_song(state, &email, id) {
             Some(song) => json_response(200, song.clone()),
             None => error(404, "Song not found"),
@@ -154,31 +153,32 @@ fn login(body: &str, state: &mut State) -> Reply {
     let nanos = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0);
     let token = state.next_id(&format!("tok{nanos}"));
     state.sessions.insert(token.clone(), email.clone());
+    if !state.songs.contains_key(&email) {
+        let tracks = DEMO_TRACKS
+            .iter()
+            .enumerate()
+            .map(|(days_old, &(title, bpm))| demo_track(state.next_id("song"), &email, title, bpm, days_old as u64))
+            .collect();
+        state.songs.insert(email.clone(), tracks);
+    }
     json_response(200, json!({ "token": token, "user": { "email": email } }))
 }
 
-fn generate(email: &str, body: &str, state: &mut State) -> Reply {
-    let prompt = serde_json::from_str::<Value>(body)
-        .ok()
-        .and_then(|v| v["prompt"].as_str().map(str::to_string))
-        .unwrap_or_else(|| "Dark melodic techno".to_string());
+fn demo_track(id: String, owner: &str, title: &str, bpm: u32, days_old: u64) -> Value {
     let assets: Vec<Value> = STEMS
         .iter()
         .map(|s| json!({ "role": s.role, "name": s.name, "filename": s.filename, "url": format!("/v1/assets/{}", s.filename) }))
         .collect();
-    let song = json!({
-        "id": state.next_id("song"),
-        "title": "Prototype Generation",
-        "prompt": prompt,
-        "bpm": 128,
+    json!({
+        "id": id,
+        "title": title,
+        "owner": owner,
+        "bpm": bpm,
         "bars": 8,
-        "status": "complete",
-        "created_at": now_secs(),
+        "created_at": now_secs() - days_old * 86_400,
         "assets": assets,
         "uploads": [],
-    });
-    state.songs.entry(email.to_string()).or_default().push(song.clone());
-    json_response(200, song)
+    })
 }
 
 fn upload(request: &mut Request, state: &mut State, email: &str, song_id: &str, query: &str) -> Reply {
@@ -278,10 +278,10 @@ mod tests {
         body["token"].as_str().unwrap().to_string()
     }
 
-    fn generate(addr: SocketAddr, token: &str, prompt: &str) -> Value {
-        let (status, song) = json_request(addr, "POST", "/v1/generations", Some(token), &json!({"prompt": prompt}).to_string());
+    fn songs(addr: SocketAddr, token: &str) -> Vec<Value> {
+        let (status, body) = json_request(addr, "GET", "/v1/songs", Some(token), "");
         assert_eq!(status, 200);
-        song
+        body["songs"].as_array().unwrap().clone()
     }
 
     #[test]
@@ -305,38 +305,34 @@ mod tests {
         assert_eq!(request(addr, "GET", "/v1/songs", None, b"").0, 401);
         assert_eq!(request(addr, "GET", "/v1/songs", Some("made-up"), b"").0, 401);
         assert_eq!(request(addr, "GET", "/v1/assets/drums.wav", None, b"").0, 401);
-        assert_eq!(request(addr, "POST", "/v1/generations", None, b"{}").0, 401);
+        assert_eq!(request(addr, "GET", "/v1/songs/song-1", None, b"").0, 401);
     }
 
     #[test]
-    fn generations_become_the_callers_songs_newest_first() {
+    fn each_account_lists_only_the_tracks_it_owns() {
         let addr = start();
         let ana = login(addr, "ana@example.com");
         let bob = login(addr, "bob@example.com");
-        let first = generate(addr, &ana, "dark techno");
-        let second = generate(addr, &ana, "lofi");
-        assert_eq!(first["prompt"], "dark techno");
-        assert_eq!(first["assets"].as_array().unwrap().len(), 4);
-        assert_eq!(first["uploads"], json!([]));
+        let anas = songs(addr, &ana);
+        let titles: Vec<&str> = anas.iter().map(|s| s["title"].as_str().unwrap()).collect();
+        assert_eq!(titles, ["Night Drive", "Warehouse Pressure", "Sunday Lofi"]);
+        assert!(anas.iter().all(|s| s["owner"] == "ana@example.com" && s["assets"].as_array().unwrap().len() == 4));
+        assert!(anas.windows(2).all(|w| w[0]["created_at"].as_u64() > w[1]["created_at"].as_u64()), "newest first");
 
-        let (_, list) = json_request(addr, "GET", "/v1/songs", Some(&ana), "");
-        let ids: Vec<&Value> = list["songs"].as_array().unwrap().iter().map(|s| &s["id"]).collect();
-        assert_eq!(ids, [&second["id"], &first["id"]]);
+        let bobs = songs(addr, &bob);
+        assert!(bobs.iter().all(|s| s["owner"] == "bob@example.com"));
+        assert!(bobs.iter().all(|b| anas.iter().all(|a| a["id"] != b["id"])));
 
-        // Songs are private to their owner.
-        assert_eq!(json_request(addr, "GET", "/v1/songs", Some(&bob), "").1["songs"], json!([]));
-        let path = format!("/v1/songs/{}", first["id"].as_str().unwrap());
-        assert_eq!(json_request(addr, "GET", &path, Some(&ana), "").1, first);
-        assert_eq!(request(addr, "GET", &path, Some(&bob), b"").0, 404);
+        let path = format!("/v1/songs/{}", anas[0]["id"].as_str().unwrap());
+        assert_eq!(json_request(addr, "GET", &path, Some(&ana), "").1, anas[0]);
+        assert_eq!(request(addr, "GET", &path, Some(&bob), b"").0, 404, "not Bob's track");
     }
 
     #[test]
-    fn generation_falls_back_to_a_default_prompt() {
+    fn signing_in_again_keeps_the_same_tracks() {
         let addr = start();
-        let token = login(addr, "ana@example.com");
-        let (status, song) = json_request(addr, "POST", "/v1/generations", Some(&token), "not json");
-        assert_eq!(status, 200);
-        assert_eq!(song["prompt"], "Dark melodic techno");
+        let first = songs(addr, &login(addr, "ana@example.com"));
+        assert_eq!(songs(addr, &login(addr, "ana@example.com")), first);
     }
 
     #[test]
@@ -357,7 +353,7 @@ mod tests {
         let addr = start();
         let ana = login(addr, "ana@example.com");
         let bob = login(addr, "bob@example.com");
-        let song_id = generate(addr, &ana, "dark techno")["id"].as_str().unwrap().to_string();
+        let song_id = songs(addr, &ana)[0]["id"].as_str().unwrap().to_string();
 
         let path = format!("/v1/songs/{song_id}/uploads?filename=My%20Mix%20(final).WAV");
         let (status, body) = request(addr, "POST", &path, Some(&ana), b"RIFF-mixdown");
@@ -380,7 +376,7 @@ mod tests {
     fn rejects_bad_uploads() {
         let addr = start();
         let token = login(addr, "ana@example.com");
-        let song_id = generate(addr, &token, "x")["id"].as_str().unwrap().to_string();
+        let song_id = songs(addr, &token)[0]["id"].as_str().unwrap().to_string();
         let upload = |query: &str, body: &[u8]| request(addr, "POST", &format!("/v1/songs/{song_id}/uploads{query}"), Some(&token), body).0;
         assert_eq!(upload("", b"RIFF"), 400);
         assert_eq!(upload("?filename=..%2F..%2Fevil.wav", b"RIFF"), 400);

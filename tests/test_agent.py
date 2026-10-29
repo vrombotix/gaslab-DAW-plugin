@@ -34,7 +34,8 @@ STEMS = ROOT / "apps" / "desktop" / "src-tauri" / "assets"
 
 class MockApi(http.server.BaseHTTPRequestHandler):
     """The schemas/api.md contract served from stdlib. Its state lives on the
-    server (see start_api) so tests can inspect what the agent sent."""
+    server (see start_api) so tests can inspect what the agent sent. Every
+    account owns two tracks, created at its first sign-in."""
 
     def do_POST(self):
         api, (path, _, query) = self.server, self.path.partition("?")
@@ -43,17 +44,12 @@ class MockApi(http.server.BaseHTTPRequestHandler):
             credentials = json.loads(body)
             if credentials.get("password") != "demo":
                 return self._json(401, {"error": "Invalid email or password"})
-            api.tokens.add("tok-" + credentials["email"])
-            return self._json(200, {"token": "tok-" + credentials["email"], "user": {"email": credentials["email"]}})
-        if not self._authorized():
+            email = credentials["email"]
+            api.tokens["tok-" + email] = email
+            api.songs.setdefault(email, [self._track(email, title) for title in ("Night Drive", "Sunday Lofi")])
+            return self._json(200, {"token": "tok-" + email, "user": {"email": email}})
+        if not self._owner():
             return
-        if path == "/v1/generations":
-            song = {"id": api.next_song_id or f"song-{len(api.songs) + 1}", "title": "Test",
-                    "prompt": json.loads(body)["prompt"], "bpm": 120, "bars": 4, "uploads": [],
-                    "assets": [{"role": p.stem, "name": p.stem.title(), "filename": p.name,
-                                "url": "/v1/assets/" + p.name} for p in sorted(STEMS.glob("*.wav"))]}
-            api.songs.insert(0, song)
-            return self._json(200, song)
         match = re.fullmatch(r"/v1/songs/([^/]+)/uploads", path)
         if match:
             filename = urllib.parse.parse_qs(query).get("filename", [""])[0]
@@ -64,13 +60,15 @@ class MockApi(http.server.BaseHTTPRequestHandler):
         self._json(404, {"error": "Not found"})
 
     def do_GET(self):
-        api = self.server
-        if not self._authorized():
+        api, owner = self.server, self._owner()
+        if not owner:
             return
         if self.path == "/v1/songs":
-            return self._json(200, {"songs": api.songs})
+            return self._json(200, {"songs": api.songs[owner]})
         if self.path.startswith("/v1/songs/"):
-            song = next((s for s in api.songs if s["id"] == self.path.rsplit("/", 1)[-1]), None)
+            if api.song_override:  # a hostile or broken reply, for the safety tests
+                return self._json(200, api.song_override)
+            song = next((s for s in api.songs[owner] if s["id"] == self.path.rsplit("/", 1)[-1]), None)
             return self._json(200, song) if song else self._json(404, {"error": "Song not found"})
         path = STEMS / self.path.rsplit("/", 1)[-1]
         if self.path.startswith("/v1/assets/") and path.is_file():
@@ -78,12 +76,19 @@ class MockApi(http.server.BaseHTTPRequestHandler):
             return self._send(200, "audio/wav", path.read_bytes())
         self._json(404, {"error": "Not found"})
 
-    def _authorized(self):
-        token = self.headers.get("Authorization", "").removeprefix("Bearer ")
-        if token in self.server.tokens:
-            return True
-        self._json(401, {"error": "Sign in required"})
-        return False
+    def _track(self, owner, title):
+        self.server.next_id += 1
+        return {"id": f"song-{self.server.next_id}", "title": title, "owner": owner, "bpm": 120, "bars": 4,
+                "created_at": 1790000000 - self.server.next_id, "uploads": [],
+                "assets": [{"role": p.stem, "name": p.stem.title(), "filename": p.name,
+                            "url": "/v1/assets/" + p.name} for p in sorted(STEMS.glob("*.wav"))]}
+
+    def _owner(self):
+        """The signed-in email for the request's token, or None after answering 401."""
+        owner = self.server.tokens.get(self.headers.get("Authorization", "").removeprefix("Bearer "))
+        if owner is None:
+            self._json(401, {"error": "Sign in required"})
+        return owner
 
     def _json(self, status, data):
         self._send(status, "application/json", json.dumps(data).encode())
@@ -118,18 +123,21 @@ class AgentTestCase(unittest.TestCase):
     def start_api(self):
         """Starts the stub API; returns the server, whose attributes are its state."""
         server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), MockApi)
-        server.tokens, server.songs, server.uploads, server.downloads, server.next_song_id = set(), [], [], 0, None
+        server.tokens, server.songs, server.uploads, server.downloads, server.next_id, server.song_override = {}, {}, [], 0, 0, None
         server.url = f"http://127.0.0.1:{server.server_port}"
         threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.05}, daemon=True).start()
         self.addCleanup(server.server_close)
         self.addCleanup(server.shutdown)
         return server
 
-    def sign_in(self):
-        api = self.start_api()
-        result = self.agent("login", "--email", "ana@example.com", "--api", api.url, password="demo")
+    def sign_in(self, email="ana@example.com", api=None):
+        api = api or self.start_api()
+        result = self.agent("login", "--email", email, "--api", api.url, password="demo")
         self.assertEqual(result["ok"], "true", result)
         return api
+
+    def first_track(self):
+        return self.agent("songs")["songs"][0]["id"]
 
     def install(self):
         """Runs install-bridges; returns {daw: installed script path}."""
@@ -176,22 +184,21 @@ class TestCli(AgentTestCase):
             self.assertEqual((daws[daw]["supports_auto_import"], daws[daw]["supports_render"]), ("true", "true"))
         self.assertEqual(sorted(self.install()), ["ableton", "ardour", "reaper"])
 
-    def test_generate_downloads_every_stem(self):
+    def test_download_fetches_every_stem(self):
         self.sign_in()
-        prompt = 'dark "techno"\twith\ncontrol characters'
-        result = self.agent("generate", "--prompt", prompt)
+        result = self.agent("download", "--song", self.first_track())
         self.assertEqual(result["ok"], "true", result)
-        self.assertEqual(result["prompt"], prompt)  # JSON escaping round-trips
+        self.assertEqual(result["title"], "Night Drive")
         self.assertEqual(len(result["assets"]), 4)
         for asset in result["assets"]:
             local = Path(asset["local_path"])
             self.assertEqual(local.read_bytes(), (STEMS / local.name).read_bytes())
             self.assertFalse(local.with_name(local.name + ".part").exists())
-        self.assertEqual(json.loads(Path(result["manifest_path"]).read_text())["id"], "song-1")
+        self.assertEqual(json.loads(Path(result["manifest_path"]).read_text())["title"], "Night Drive")
 
-    def test_generate_reports_unreachable_api(self):
+    def test_unreachable_api_is_reported(self):
         self.sign_in()
-        result = self.agent("generate", "--api", "http://127.0.0.1:9")
+        result = self.agent("songs", "--api", "http://127.0.0.1:9")
         self.assertEqual(result["ok"], "false")
         self.assertTrue(result["error"])
         self.assertNotIn("auth_required", result)
@@ -263,7 +270,7 @@ class TestApi(AgentTestCase):
 
     def test_api_commands_ask_to_sign_in_first(self):
         manifest, stems = self.make_generation()
-        for args in (["songs"], ["generate"], ["download", "--song", "song-1"],
+        for args in (["songs"], ["download", "--song", "song-1"],
                      ["upload", "--song", "song-1", "--file", stems[0]]):
             result = self.agent(*args)
             self.assertEqual((result["ok"], result.get("auth_required")), ("false", "true"), args)
@@ -281,17 +288,19 @@ class TestApi(AgentTestCase):
         self.assertFalse(self.session_file().exists())
         self.assertEqual(self.agent("songs")["auth_required"], "true")
 
-    def test_songs_lists_the_users_songs_newest_first(self):
-        self.sign_in()
-        self.agent("generate", "--prompt", "first")
-        self.agent("generate", "--prompt", "second")
+    def test_songs_lists_only_the_tracks_the_user_owns(self):
+        api = self.sign_in("bob@example.com")
+        self.sign_in("ana@example.com", api)
         result = self.agent("songs")
         self.assertEqual(result["user"]["email"], "ana@example.com")
-        self.assertEqual([song["prompt"] for song in result["songs"]], ["second", "first"])
+        self.assertEqual([song["title"] for song in result["songs"]], ["Night Drive", "Sunday Lofi"])
+        self.assertEqual({song["owner"] for song in result["songs"]}, {"ana@example.com"})
+        self.assertNotIn(api.songs["bob@example.com"][0]["id"], [song["id"] for song in result["songs"]])
 
     def test_download_fetches_a_songs_stems_once(self):
         api = self.sign_in()
-        song_id = self.agent("generate")["id"]
+        song_id = self.first_track()
+        self.agent("download", "--song", song_id)
         self.assertEqual(api.downloads, 4)
         result = self.agent("download", "--song", song_id)
         self.assertEqual(result["ok"], "true", result)
@@ -310,7 +319,7 @@ class TestApi(AgentTestCase):
 
     def test_upload_sends_the_file_to_the_song(self):
         api = self.sign_in()
-        song_id = self.agent("generate")["id"]
+        song_id = self.first_track()
         mix = self.home / "My Mix (final).wav"
         mix.write_bytes(b"RIFF" + bytes(range(256)) * 64)
 
@@ -328,7 +337,7 @@ class TestApi(AgentTestCase):
 
     def test_export_needs_a_daw_that_can_render(self):
         self.sign_in()
-        song_id = self.agent("generate")["id"]
+        song_id = self.first_track()
         for daw in ("ableton", "flstudio", "logic"):
             result = self.agent("export", "--daw", daw, "--song", song_id)
             self.assertEqual(result["ok"], "false")
@@ -337,12 +346,11 @@ class TestApi(AgentTestCase):
 
     def test_unsafe_names_from_the_api_are_rejected(self):
         api = self.sign_in()
-        api.next_song_id = "../../escape"
-        self.assertIn("invalid song id", self.agent("generate")["error"])
+        stem = {"role": "x", "name": "X", "filename": "drums.wav", "url": "/v1/assets/drums.wav"}
+        api.song_override = {"id": "../../escape", "title": "T", "assets": [stem]}
+        self.assertIn("invalid song id", self.agent("download", "--song", "song-1")["error"])
 
-        api.next_song_id = None
-        api.songs.insert(0, {"id": "song-x", "assets": [
-            {"role": "x", "name": "X", "filename": "../../escape.wav", "url": "/v1/assets/drums.wav"}]})
+        api.song_override = {"id": "song-x", "title": "T", "assets": [dict(stem, filename="../../escape.wav")]}
         self.assertIn("invalid file name", self.agent("download", "--song", "song-x")["error"])
         self.assertEqual(list(self.home.rglob("escape*")), [])
 
@@ -381,7 +389,7 @@ class TestBridges(AgentTestCase):
     def export(self, daw, tick):
         """Runs `daw-agent export` while ticking the bridge; returns (agent result, uploads, every tick's output)."""
         api = self.sign_in()
-        song_id = self.agent("generate")["id"]
+        song_id = self.first_track()
         tick()  # heartbeat
         agent = subprocess.Popen([AGENT, "export", "--daw", daw, "--song", song_id], env=self.env,
                                  stdout=subprocess.PIPE, text=True)

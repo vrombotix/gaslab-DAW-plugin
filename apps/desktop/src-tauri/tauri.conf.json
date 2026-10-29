@@ -19,5 +19,13 @@
     }],
     "security": { "csp": null }
   },
-  "bundle": { "active": false }
+  "bundle": {
+    "active": true,
+    "externalBin": ["binaries/daw-agent"],
+    "icon": ["icons/icon.png"],
+    "macOS": { "minimumSystemVersion": "10.15" },
+    "resources": {
+      "../../../integrations": "integrations"
+    }
+  }
 }

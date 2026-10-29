@@ -2,21 +2,78 @@
 
 A first end-to-end prototype for a **standalone AI music generation app that can hand generated stems directly to multiple DAWs**.
 
-The current prototype implements the shared architecture and the first DAW adapter: **Ardour 9.x on Linux**.
+The current prototype implements the shared architecture and adapters for **Ardour, REAPER, Ableton Live, FL Studio and Logic Pro** (see [DAW support](#daw-support)). Ardour 9.x on Linux is the one exercised end to end.
 
-## What works in v0.1
+## What the app does
 
-1. React + TypeScript desktop UI.
-2. Tauri 2 desktop shell.
-3. C++20 native `daw-agent`.
-4. A real local HTTP mock generation API.
-5. The API returns four fixed WAV stems: Drums, Bass, Synth and Vocals.
-6. The C++ agent downloads those files into a persistent local generation folder.
-7. Ardour detection and launch support.
-8. Ardour Lua bridge heartbeat/detection.
-9. Clicking **Import all stems into Ardour** queues all four files for the active Ardour session at the current playhead.
+1. **Sign in** to the music API.
+2. **My songs** lists every song of that user; **Generate** creates a new one from a prompt.
+3. Opening a song downloads its stems to a persistent local folder.
+4. **Import into DAW** hands the stems to whichever DAW has a live bridge. Every DAW can also take them by dragging the stems out of the app.
+5. **Export mix to API**: bounce your mix in the DAW, pick the file, and it is uploaded to that song. In dev mode, Ardour and REAPER can also **render the mix themselves** and upload it in one click.
 
-The Ardour import bridge is intentionally isolated behind an adapter so Ableton, REAPER, FL Studio etc. can be added without changing the generation UI or cloud API.
+The API is a stand-in built into the app (any email, password `demo`). It always returns the same four demo stems: Drums, Bass, Synth and Vocals. Its contract - sign-in, song list, download, upload - is in [schemas/api.md](schemas/api.md), so a real backend can replace it without changing the app.
+
+## DAW support
+
+| DAW | Platforms | How stems get in | Status |
+|---|---|---|---|
+| Ableton Live 12.0.5+ | macOS, Windows | Python Control Surface bridge: one new audio track per stem, clip at the playhead (`Track.create_audio_clip`) | Unverified in Live |
+| FL Studio | macOS, Windows | Drag from the app - FL's scripting API cannot load audio files | Detect + launch |
+| Logic Pro | macOS | Drag from the app - Logic has no scripting API | Detect + launch |
+| Ardour 9 *(dev mode)* | Linux, macOS, Windows | Lua Editor Hook bridge, at the playhead; renders the mix on request (Ardour's export API) | Import exercised on a real install (Linux) |
+| REAPER *(dev mode)* | Linux, macOS, Windows | Lua bridge loaded from `__startup.lua`, at the edit cursor; renders the mix on request, restoring the project's render settings | Unverified in REAPER |
+
+**Dev mode.** Ardour and REAPER only exist when the agent runs with `AI_DAW_DEV=1`, which `npm run tauri dev` sets automatically. Release installers show Ableton Live, FL Studio and Logic Pro only, and never touch Ardour's or REAPER's script folders.
+
+Every DAW also takes a drag: the stems in the Result panel (each one, or **Drag all stems**) are real files dragged with the OS's native drag-and-drop, so they drop into a DAW like files from Finder/Explorer.
+
+The bridge protocol of Ardour, REAPER and Ableton is tested in CI against stubbed DAW APIs (see [Tests and CI](#tests-and-ci)); "unverified" means nobody has run it inside that DAW yet. On Windows the agent can't tell whether a DAW is running, so a bridge DAW shows as running once its bridge heartbeat appears.
+
+## Downloads (macOS, Windows, Linux)
+
+Installers are built by GitHub Actions, never by hand:
+
+| Platform | Files |
+|---|---|
+| macOS 10.15+ (Apple Silicon and Intel, separate builds) | `.dmg` |
+| Windows 10/11 x64 | `.msi` and `-setup.exe` |
+| Linux x64 | `.AppImage`, `.deb`, `.rpm` |
+
+To release: bump `version` in `apps/desktop/src-tauri/tauri.conf.json`, commit, then push a matching tag:
+
+```bash
+git tag v0.2.0 && git push origin v0.2.0
+```
+
+`.github/workflows/release.yml` reruns the full CI suite, builds all four installers and attaches them to a **draft** GitHub Release - check it, then click Publish.
+
+The installers are not code-signed yet. macOS shows "unidentified developer" (right-click the app > Open, or System Settings > Privacy & Security > Open Anyway) and Windows SmartScreen shows "More info > Run anyway". Signing needs an Apple Developer ID and a Windows code-signing certificate added as repository secrets.
+
+## Tests and CI
+
+`.github/workflows/ci.yml` runs on every pull request and every push to `main`:
+
+| Job | Runs on | What |
+|---|---|---|
+| Agent + bridges | Linux, macOS, Windows | `ctest`: C++ adapter unit tests (`native/tests/`), then `tests/test_agent.py` - the agent CLI against a stub of the API contract (sign-in, songs, download, upload, rejected tokens, unsafe names), dev-mode gating, bridge installation, the full import protocol of the Ardour, REAPER and Ableton bridges, and the Ardour/REAPER render-and-upload protocol, all with the DAW APIs stubbed |
+| Desktop app | Linux | `npm test` (React UI, Vitest: sign-in, songs, import, export, drag), `npm run build` (type-check), `cargo test` (built-in mock API) |
+
+Run the same locally:
+
+```bash
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release && cmake --build build --config Release
+ctest --test-dir build -C Release --output-on-failure   # Ardour/REAPER bridge tests need `lua` (apt install lua5.4)
+cd apps/desktop && npm test && cd src-tauri && cargo test
+```
+
+To block merges that break the tests, protect `main` on GitHub (Settings > Branches): require a pull request and the CI status checks to pass.
+
+### Ableton Live setup
+
+1. Start the desktop app once - it copies `integrations/ableton/AI_DAW_Bridge` into Live's `User Library/Remote Scripts`.
+2. Restart Live, then **Settings > Link, Tempo & MIDI > Control Surface** and pick **AI_DAW_Bridge** (no MIDI input/output needed).
+3. The Ableton card shows `bridge ready`; **Import into Ableton Live** adds one track per stem at the playhead.
 
 ---
 
@@ -29,13 +86,13 @@ React + TypeScript UI
         |
     C++20 daw-agent
       /        \
-Mock AI API     DAW adapters
-                   |
-                 Ardour
-               Lua bridge
+ Music API      DAW adapters
+(sign-in, songs,   |
+ download, upload) Ardour / REAPER / Ableton bridges,
+                   FL Studio / Logic Pro (drag only)
 ```
 
-The mock API is a separate process on purpose. The C++ agent performs actual HTTP requests and downloads, so replacing the mock API with the real generation platform later does not require changing the desktop architecture.
+The C++ agent makes every API call (with the signed-in user's token) and talks to every DAW, so the UI never contains API- or DAW-specific code. The built-in mock API runs inside the desktop app; pointing the agent at a real backend that follows [schemas/api.md](schemas/api.md) needs no app changes.
 
 ---
 
@@ -70,15 +127,12 @@ cargo --version
 
 ---
 
-## Quick smoke test
+## Building on macOS and Windows
 
-Before setting up the GUI or Ardour integration, you can validate the mock API + C++ chain with:
+- **macOS:** Xcode command line tools, CMake, Rust, Node, and `brew install boost`. curl comes with macOS.
+- **Windows:** Visual Studio 2022 (C++ workload), CMake, Rust, Node, and [vcpkg](https://vcpkg.io): `vcpkg install curl:x64-windows-static boost-property-tree:x64-windows-static`, then configure with `-DCMAKE_TOOLCHAIN_FILE=<vcpkg>/scripts/buildsystems/vcpkg.cmake -DVCPKG_TARGET_TRIPLET=x64-windows-static`.
 
-```bash
-./scripts/smoke-test.sh
-```
-
-This builds the agent, temporarily starts the dependency-free mock API, performs a fake generation, downloads all four stems, then shuts the mock API down.
+After building the agent, `./scripts/prepare-sidecar.sh` copies it to where Tauri bundles it from.
 
 ---
 
@@ -103,41 +157,26 @@ You should receive JSON containing:
 {"ok":"true","service":"daw-agent"}
 ```
 
-Check Ardour detection:
+Check Ardour detection (Ardour is a [dev-mode](#daw-support) DAW, hence `AI_DAW_DEV=1`):
 
 ```bash
-./build/daw-agent daws
+AI_DAW_DEV=1 ./build/daw-agent daws
 ```
 
 The agent checks common locations including the official Ardour installer path under `/opt/Ardour-*`.
 
 ---
 
-## 3. Start the fake AI API
+## 3. The API
 
-Open terminal 1:
-
-```bash
-cd mock-api
-npm install
-npm run dev
-```
-
-You should see:
-
-```text
-Mock AI API listening on http://127.0.0.1:8787
-```
-
-The API does not generate music yet. Every request returns the four WAV files in `mock-api/assets/`.
-
-You can test the full native generation path before opening the UI:
+The desktop app starts the built-in mock API on `http://127.0.0.1:8787` itself. To use the agent from a terminal, keep the app open (or point `--api` at a real backend), then sign in once - the password is read from the environment, never from the command line:
 
 ```bash
+AI_DAW_PASSWORD=demo ./build/daw-agent login --email you@example.com
 ./build/daw-agent generate --prompt "dark techno"
 ```
 
-Downloaded generations are stored under:
+The session is stored in `session.json` in the data folder, readable only by you. Downloaded songs are stored under:
 
 ```text
 ~/.local/share/ai-daw-prototype/generations/
@@ -145,17 +184,17 @@ Downloaded generations are stored under:
 
 ---
 
-# 4. Install the Ardour bridge
+# 4. Install the Ardour bridge (dev mode)
 
 The prototype uses an Ardour **Editor Hook**. It watches a local request file written by the C++ agent and imports the referenced WAV files into the active session.
 
-Install the supplied bridge script with:
+The desktop app installs the bridge script on every start of `npm run tauri dev`. Without the app, run:
 
 ```bash
-./scripts/install-ardour-bridge.sh
+AI_DAW_DEV=1 ./build/daw-agent install-bridges
 ```
 
-The helper installs it into both `~/.config/ardour8/scripts` and `~/.config/ardour9/scripts` because the exact user-data directory can differ by Ardour packaging/version.
+It installs every DAW's bridge (Ardour into `~/.config/ardour9/scripts`) and writes this machine's bridge directory into each script.
 
 Then:
 
@@ -176,7 +215,7 @@ The hook writes a heartbeat here:
 After a second or two, run:
 
 ```bash
-./build/daw-agent daws
+AI_DAW_DEV=1 ./build/daw-agent daws
 ```
 
 `bridge_ready` should now be `true`.
@@ -201,26 +240,16 @@ The app should open as a native desktop window.
 
 Workflow:
 
-1. Make sure the mock API is running.
-2. Open an Ardour session and enable the bridge.
-3. Type any prompt.
-4. Click **Generate**.
-5. Four fixed demo stems are downloaded by the C++ agent.
-6. Ardour should show `running` and `bridge ready` in the app.
-7. Put Ardour's playhead where you want the generation.
-8. Click **Import all stems into Ardour**.
-9. The bridge imports the four WAV files at the playhead as separate tracks.
+1. Sign in (built-in mock: any email, password `demo`).
+2. Type a prompt and click **Generate**, or click **Open** on a song in **My songs**.
+3. Open an Ardour session and enable the bridge; the app shows `bridge ready`.
+4. Put Ardour's playhead where you want the song and click **Import into Ardour**. The bridge imports the stems at the playhead as separate tracks.
+5. Mix, then bounce/export the mix from the DAW.
+6. Click **Export mix to API** and pick the bounced file. It is uploaded to the song and listed under it.
 
 ---
 
 # Running pieces separately
-
-### Fake API
-
-```bash
-cd mock-api
-npm run dev
-```
 
 ### C++ agent health
 
@@ -237,19 +266,24 @@ npm run dev
 ### Launch Ardour
 
 ```bash
-./build/daw-agent launch --daw ardour
+AI_DAW_DEV=1 ./build/daw-agent launch --daw ardour
 ```
 
-### Fake generation without the UI
+### Songs without the UI
 
 ```bash
+AI_DAW_PASSWORD=demo ./build/daw-agent login --email you@example.com
+./build/daw-agent songs
 ./build/daw-agent generate --prompt "Berlin warehouse techno"
+./build/daw-agent download --song song-1
+./build/daw-agent upload --song song-1 --file ~/Desktop/mix.wav
+./build/daw-agent logout
 ```
 
-The response contains a `manifest_path`. Use that path for a manual import test:
+`generate` and `download` print a `manifest_path`. Use it for a manual import test:
 
 ```bash
-./build/daw-agent import --daw ardour --manifest /absolute/path/to/generation.json
+AI_DAW_DEV=1 ./build/daw-agent import --daw ardour --manifest /absolute/path/to/generation.json
 ```
 
 ---
@@ -258,8 +292,9 @@ The response contains a `manifest_path`. Use that path for a manual import test:
 
 ```text
 ~/.local/share/ai-daw-prototype/
+├── session.json            signed-in user's API token (owner-only)
 ├── generations/
-│   └── demo-.../
+│   └── song-.../
 │       ├── drums.wav
 │       ├── bass.wav
 │       ├── synth.wav
@@ -280,16 +315,15 @@ Generation files are deliberately persistent instead of temporary because DAW se
 ```text
 ai-daw-prototype/
 ├── apps/
-│   └── desktop/               React + TypeScript + Tauri
+│   └── desktop/               React + TypeScript + Tauri (+ built-in mock API)
 ├── native/
 │   ├── agent/                 C++ command-line DAW agent
 │   ├── core/                  shared native data types
-│   └── adapters/              DAW-specific native adapters
-├── integrations/
-│   └── ardour/                Ardour Lua bridge
-├── mock-api/                  TypeScript fake AI API
-│   └── assets/                fixed demo WAV stems
-├── schemas/                   shared protocol schemas
+│   ├── adapters/              DAW-specific native adapters
+│   └── tests/                 C++ unit tests
+├── integrations/              DAW bridges: ardour/, reaper/ (Lua), ableton/ (Python)
+├── schemas/                   API contract (api.md) and manifest schema
+├── tests/                     agent CLI + bridge protocol tests
 ├── CMakeLists.txt
 └── README.md
 ```
@@ -319,9 +353,11 @@ The API likewise returns a generic generation manifest rather than DAW-specific 
 - **Ardour import code needs to be validated on your exact Ardour 9.7 build.** Ardour's Lua API is powerful but explicitly subject to change. The supplied bridge uses documented/current Lua bindings and `Editor:do_embed`, but this is the first hardware/software integration point to test on your machine.
 - The React/Tauri layer currently spawns the C++ agent per command. A production build can turn it into a persistent sidecar/daemon while keeping the same frontend command contract.
 - The current Ardour bridge uses a file-based local handoff. This is deliberate for the first POC because it is simple and inspectable. Later we can replace it with a socket/MCP-style transport without changing the desktop app contract.
-- Only Linux/Ardour is implemented in v0.1. The C++ interface is already split so the next adapter does not require a frontend rewrite.
-- The mock API returns immediately. A real generation API will likely use queued jobs plus WebSocket/SSE/polling progress.
-- No authentication, update system, crash recovery, project-owned media copying, or production installer exists yet.
+- Only Linux/Ardour has been exercised against a real DAW. The other adapters are written against each DAW's documented API but not yet run in it.
+- The mock API returns immediately and keeps everything in memory until the app quits. A real generation API will likely use queued jobs plus WebSocket/SSE/polling progress.
+- The API token is kept in a file only the user can read; production should move it into the OS keychain.
+- Ableton Live, FL Studio and Logic Pro can't be told to render from outside, so their export uploads a file you bounced yourself. Ardour and REAPER (dev mode) render on request.
+- No update system, crash recovery or project-owned media copying exists yet, and installers are unsigned.
 
 ---
 

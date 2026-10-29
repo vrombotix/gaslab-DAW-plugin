@@ -7,6 +7,7 @@ public:
   DawInfo info() const override;
   bool launch() const override;
   bool queueImport(const Generation& generation, std::string& error) const override;
+  bool renderMix(const std::filesystem::path& file, std::string& error) const override;
 
   static std::filesystem::path bridgeDir();
 private:

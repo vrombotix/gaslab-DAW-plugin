@@ -1,31 +1,35 @@
 #include <aidaudio/ArdourAdapter.hpp>
+#include <aidaudio/BridgeRender.hpp>
+#include <aidaudio/PlatformPaths.hpp>
+#include <algorithm>
+#include <cctype>
 #include <chrono>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <sstream>
-#include <thread>
+
+#if defined(__linux__)
 #include <unistd.h>
+#endif
 
 namespace fs = std::filesystem;
 
 namespace {
-fs::path homeDir() {
-  if (const char* home = std::getenv("HOME")) return fs::path(home);
-  return fs::temp_directory_path();
-}
-
+#if defined(__linux__)
 bool executableFile(const fs::path& p) {
   return fs::exists(p) && !fs::is_directory(p) && ::access(p.c_str(), X_OK) == 0;
 }
+#endif
 }
 
 namespace aidaudio {
 fs::path ArdourAdapter::bridgeDir() {
-  return homeDir() / ".local" / "share" / "ai-daw-prototype" / "ardour";
+  return paths::bridgeDir("ardour");
 }
 
 std::string ArdourAdapter::findExecutable() {
+#if defined(__linux__)
   const std::vector<fs::path> common = {
     "/opt/Ardour-9.7.0/bin/ardour9",
     "/opt/Ardour-9.7.0/bin/ardour9.7.0",
@@ -59,9 +63,18 @@ std::string ArdourAdapter::findExecutable() {
     }
   }
   return {};
+#elif defined(__APPLE__)
+  // The .app bundle itself ("Ardour9.app") - launch() opens it through LaunchServices.
+  return paths::findPrefixed("/Applications", "Ardour").string();
+#else
+  // Windows install layout not confirmed yet - imports still work once the
+  // bridge heartbeat is live, only "installed"/launch are unavailable.
+  return {};
+#endif
 }
 
 bool ArdourAdapter::processRunning() {
+#if defined(__linux__)
   std::error_code ec;
   for (const auto& entry : fs::directory_iterator("/proc", ec)) {
     const auto n = entry.path().filename().string();
@@ -72,6 +85,12 @@ bool ArdourAdapter::processRunning() {
     if (name.rfind("ardour", 0) == 0 || name.rfind("Ardour", 0) == 0) return true;
   }
   return false;
+#elif defined(__APPLE__)
+  // [^/] keeps the pattern from matching the `sh -c` running pgrep itself.
+  return std::system("pgrep -f 'Ardour[^/]*\\.app/Contents/MacOS/' >/dev/null") == 0;
+#else
+  return false;
+#endif
 }
 
 bool ArdourAdapter::bridgeHeartbeatFresh() {
@@ -86,13 +105,17 @@ bool ArdourAdapter::bridgeHeartbeatFresh() {
 
 DawInfo ArdourAdapter::info() const {
   const auto exe = findExecutable();
+  const bool bridgeReady = bridgeHeartbeatFresh();
   return DawInfo{
     .id = "ardour",
     .name = "Ardour",
     .installed = !exe.empty(),
-    .running = processRunning(),
-    .bridgeReady = bridgeHeartbeatFresh(),
-    .executable = exe
+    // A live heartbeat proves Ardour is running, including on Windows where
+    // processRunning() has no implementation.
+    .running = bridgeReady || processRunning(),
+    .bridgeReady = bridgeReady,
+    .executable = exe,
+    .supportsRender = true
   };
 }
 
@@ -100,7 +123,11 @@ bool ArdourAdapter::launch() const {
   auto exe = findExecutable();
   if (exe.empty()) return false;
   if (processRunning()) return true;
+#if defined(__APPLE__)
+  const std::string command = "open \"" + exe + "\"";
+#else
   const std::string command = "\"" + exe + "\" >/dev/null 2>&1 &";
+#endif
   return std::system(command.c_str()) == 0;
 }
 
@@ -158,5 +185,14 @@ bool ArdourAdapter::queueImport(const Generation& generation, std::string& error
     return false;
   }
   return true;
+}
+
+bool ArdourAdapter::renderMix(const fs::path& file, std::string& error) const {
+  if (!bridgeHeartbeatFresh()) {
+    error = "Ardour's bridge is not running.";
+    return false;
+  }
+  // Renders can take minutes for long sessions, and the bridge is silent while the DAW renders.
+  return renderViaBridge(bridgeDir(), file, std::chrono::minutes(15), error);
 }
 }

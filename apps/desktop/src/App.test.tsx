@@ -9,6 +9,15 @@ vi.mock('@tauri-apps/api/core', () => ({ invoke: vi.fn() }));
 vi.mock('@crabnebula/tauri-plugin-drag', () => ({ startDrag: vi.fn(() => Promise.resolve()) }));
 vi.mock('@tauri-apps/plugin-dialog', () => ({ open: vi.fn() }));
 
+// jsdom has no modal <dialog>; the webviews the app runs in all do.
+if (!HTMLDialogElement.prototype.showModal) {
+  HTMLDialogElement.prototype.showModal = function (this: HTMLDialogElement) { this.setAttribute('open', ''); };
+  HTMLDialogElement.prototype.close = function (this: HTMLDialogElement) {
+    this.removeAttribute('open');
+    this.dispatchEvent(new Event('close'));
+  };
+}
+
 // Shaped like real daw-agent output: Boost's JSON writer turns every value into
 // a string and empty arrays into "".
 const ableton = { id: 'ableton', name: 'Ableton Live', installed: 'true', running: 'true', bridge_ready: 'true', executable: '', supports_auto_import: 'true' };
@@ -45,9 +54,11 @@ beforeEach(() => {
     launch: { ok: 'true' },
     logout: { ok: 'true' },
     login: { ok: 'true', user: { email: 'ana@example.com' } },
+    install: { ok: 'true', results: [
+      { daw: 'ableton', ok: 'true', detail: 'installed', path: 'C:\\Users\\ana\\Documents\\Ableton\\User Library\\Remote Scripts\\Gaslab_DAW_Plugin' }] },
   };
-  vi.mocked(invoke).mockImplementation(async (command, payload) =>
-    JSON.stringify(responses[command === 'agent_login' ? 'login' : (payload as { args: string[] }).args[0]]));
+  vi.mocked(invoke).mockImplementation(async (command, payload) => JSON.stringify(responses[
+    command === 'agent_login' ? 'login' : command === 'agent_install_bridges' ? 'install' : (payload as { args: string[] }).args[0]]));
   // jsdom has no canvas; the drag preview only needs a data URL back.
   vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue({ fillRect() {}, fillText() {} } as never);
   vi.spyOn(HTMLCanvasElement.prototype, 'toDataURL').mockReturnValue('data:image/png;base64,stub');
@@ -241,5 +252,70 @@ describe('export to the API', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Export mix' }));
     expect(await screen.findByText(/Upload failed: Sign in required/)).toBeTruthy();
     expect(screen.getByLabelText('Password')).toBeTruthy();
+  });
+});
+
+describe('setup guides', () => {
+  const onWindows = () => vi.spyOn(navigator, 'userAgent', 'get').mockReturnValue('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36');
+  const openGuide = async (daw: string) => {
+    fireEvent.click(await screen.findByRole('button', { name: `Set up ${daw}` }));
+    return screen.findByRole('dialog', { name: `Set up ${daw}` });
+  };
+
+  it('walks through Ableton on this OS, installing the plugin and showing where it went', async () => {
+    onWindows();
+    render(<App />);
+    const guide = await openGuide('Ableton Live');
+    expect(within(guide).getByText('Options › Settings…')).toBeTruthy();
+    expect(within(guide).getByText('Link, Tempo & MIDI')).toBeTruthy();
+    expect(within(guide).queryByText('Live › Settings…')).toBeNull();
+    expect(await within(guide).findByText('Installed')).toBeTruthy();
+    expect(invoke).toHaveBeenCalledWith('agent_install_bridges');
+    expect(within(guide).getByText(/Ableton\\User Library\\Remote Scripts\\Gaslab_DAW_Plugin/)).toBeTruthy();
+
+    fireEvent.click(within(guide).getByRole('button', { name: 'macOS' }));
+    expect(within(guide).getByText('Live › Settings…')).toBeTruthy();
+    expect(within(guide).getByText('~/Music/Ableton/User Library/Remote Scripts/Gaslab_DAW_Plugin')).toBeTruthy();
+    expect(within(guide).queryByRole('button', { name: 'Reinstall' })).toBeNull(); // only for this computer
+  });
+
+  it('shows why the plugin could not be installed', async () => {
+    onWindows();
+    responses.install = { ok: 'false', results: [{ daw: 'ableton', ok: 'false', detail: 'Permission denied', path: 'C:\\x' }] };
+    render(<App />);
+    const guide = await openGuide('Ableton Live');
+    expect((await within(guide).findByRole('alert')).textContent).toContain('Could not install: Permission denied');
+  });
+
+  it('tells a Linux user Ableton runs elsewhere, without installing anything', async () => {
+    render(<App />);
+    const guide = await openGuide('Ableton Live');
+    expect(within(guide).getByText(/Ableton Live doesn’t run on Linux; these steps are for macOS and Windows/)).toBeTruthy();
+    expect(invoke).not.toHaveBeenCalledWith('agent_install_bridges');
+  });
+
+  it('has no plugin for drag-only DAWs', async () => {
+    onWindows();
+    render(<App />);
+    const guide = await openGuide('FL Studio');
+    expect(within(guide).getByText('Drag the stems onto the Playlist')).toBeTruthy();
+    expect(within(guide).queryByText('Plugin location')).toBeNull();
+    expect(invoke).not.toHaveBeenCalledWith('agent_install_bridges');
+  });
+
+  it('gives the exact Ardour menu path for the hook (dev mode)', async () => {
+    responses.daws = { ok: 'true', daws: [ableton, { ...ableton, id: 'ardour', name: 'Ardour', bridge_ready: 'false' }] };
+    render(<App />);
+    const guide = await openGuide('Ardour');
+    expect(within(guide).getByText('Edit › Lua Scripts › Script Manager')).toBeTruthy();
+    expect(within(guide).getAllByText('New Hook').length).toBeGreaterThan(0);
+    expect(within(guide).getAllByText('Gaslab DAW Plugin').length).toBeGreaterThan(0);
+  });
+
+  it('closes', async () => {
+    render(<App />);
+    const guide = await openGuide('FL Studio');
+    fireEvent.click(within(guide).getByRole('button', { name: 'Close' }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
   });
 });

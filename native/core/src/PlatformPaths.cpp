@@ -63,8 +63,10 @@ std::filesystem::path ardourScriptsDir() {
   // This targets the version this prototype was built/tested against; an
   // installer should also try older major versions as a fallback.
 #if defined(_WIN32)
-  if (const char* appdata = env("APPDATA")) return fs::path(appdata) / "Ardour9" / "scripts";
-  return homeDir() / "AppData" / "Roaming" / "Ardour9" / "scripts";
+  // Ardour keeps its config under Local, not Roaming, AppData (Ardour manual,
+  // "Lua Scripting": %localappdata%\ardourN\scripts).
+  if (const char* local = env("LOCALAPPDATA")) return fs::path(local) / "ardour9" / "scripts";
+  return homeDir() / "AppData" / "Local" / "ardour9" / "scripts";
 #elif defined(__APPLE__)
   return homeDir() / "Library" / "Preferences" / "Ardour9" / "scripts";
 #else

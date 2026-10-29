@@ -372,9 +372,10 @@ constexpr std::string_view kBridgeDirPlaceholder = "@AI_DAW_BRIDGE_DIR@";
 
 // REAPER only auto-runs Scripts/__startup.lua, which may hold the user's own
 // startup code - so the bridge is installed beside it and this line is
-// appended once instead of overwriting the file.
+// appended once (recognised by the script path) instead of overwriting the file.
+constexpr std::string_view kReaperBridgeScript = "/Scripts/ai_daw_import_bridge.lua";
 constexpr std::string_view kReaperStartupLine =
-  "dofile(reaper.GetResourcePath() .. \"/Scripts/ai_daw_import_bridge.lua\") -- AI DAW Import Bridge";
+  "dofile(reaper.GetResourcePath() .. \"/Scripts/ai_daw_import_bridge.lua\") -- Gaslab DAW Plugin";
 
 std::string readText(const fs::path& path) {
   std::ifstream in(path, std::ios::binary);
@@ -412,9 +413,10 @@ bool installScript(const fs::path& src, const fs::path& dst, const std::string& 
   return true;
 }
 
-bool appendLineOnce(const fs::path& file, std::string_view line, std::string& error) {
+// Appends `line` unless the file already mentions `marker`.
+bool appendLineOnce(const fs::path& file, std::string_view line, std::string_view marker, std::string& error) {
   const auto text = readText(file);
-  if (text.find(line) != std::string::npos) return true;
+  if (text.find(marker) != std::string::npos) return true;
   std::ofstream out(file, std::ios::binary | std::ios::app);
   if (!text.empty() && text.back() != '\n') out << '\n';
   out << line << '\n';
@@ -450,7 +452,7 @@ std::vector<BridgeInstallResult> installBridges() {
       std::string error;
       r.path = paths::reaperScriptsDir() / "ai_daw_import_bridge.lua";
       r.ok = installScript(integrations / "reaper" / "ai_daw_import_bridge.lua", r.path, "reaper", error) &&
-             appendLineOnce(paths::reaperScriptsDir() / "__startup.lua", kReaperStartupLine, error);
+             appendLineOnce(paths::reaperScriptsDir() / "__startup.lua", kReaperStartupLine, kReaperBridgeScript, error);
       r.detail = r.ok ? "installed" : error;
       results.push_back(r);
     }
@@ -458,10 +460,10 @@ std::vector<BridgeInstallResult> installBridges() {
   {
     BridgeInstallResult r{"ableton"};
     std::string error;
-    r.path = paths::abletonRemoteScriptsDir() / "AI_DAW_Bridge";
-    const auto src = integrations / "ableton" / "AI_DAW_Bridge";
+    r.path = paths::abletonRemoteScriptsDir() / "Gaslab_DAW_Plugin";
+    const auto src = integrations / "ableton" / "Gaslab_DAW_Plugin";
     r.ok = installScript(src / "__init__.py", r.path / "__init__.py", "ableton", error) &&
-           installScript(src / "AI_DAW_Bridge.py", r.path / "AI_DAW_Bridge.py", "ableton", error);
+           installScript(src / "daw_plugin.py", r.path / "daw_plugin.py", "ableton", error);
     r.detail = r.ok ? "installed" : error;
     results.push_back(r);
   }

@@ -4,8 +4,9 @@ import { startDrag } from '@crabnebula/tauri-plugin-drag';
 import { open } from '@tauri-apps/plugin-dialog';
 import { HugeiconsIcon } from '@hugeicons/react';
 import {
-  ArrowRight02Icon, CloudUploadIcon, DragDropIcon, LockPasswordIcon, Logout03Icon, Mail01Icon,
+  ArrowRight02Icon, CloudUploadIcon, DragDropIcon, HelpCircleIcon, LockPasswordIcon, Logout03Icon, Mail01Icon,
 } from '@hugeicons/core-free-icons';
+import { SetupGuide, hasGuide, type InstallResult } from './setupGuides';
 
 // daw-agent writes JSON with Boost.PropertyTree: every value arrives as a string
 // ("true", "128") and an empty array arrives as "".
@@ -63,7 +64,7 @@ function AppBrand() {
       </svg>
       <span className="min-w-0">
         <span className="block text-xl font-semibold leading-none tracking-tight text-white">Gaslab</span>
-        <span className="mt-1 block text-[10px] font-medium uppercase tracking-[0.18em] text-white/35">DAW</span>
+        <span className="mt-1 block text-[10px] font-medium uppercase tracking-[0.18em] text-white/35">DAW Plugin</span>
       </span>
     </div>
   );
@@ -123,6 +124,7 @@ export default function App() {
   const [generation, setGeneration] = useState<Generation | null>(null);
   const [daws, setDaws] = useState<Daw[]>([]);
   const [busy, setBusy] = useState(false);
+  const [guideFor, setGuideFor] = useState<Daw | null>(null);
   const [notice, setNotice] = useState({ text: 'Connecting to Gaslab…', error: false });
   const say = (text: string) => setNotice({ text, error: false });
 
@@ -153,6 +155,9 @@ export default function App() {
     setSongs(asList<Song>(result.songs));
     return true;
   };
+
+  const installBridges = async () =>
+    asList<InstallResult>(JSON.parse(await invoke<string>('agent_install_bridges')).results);
 
   const refreshDaws = async () => {
     try {
@@ -305,11 +310,16 @@ export default function App() {
             </span>
             {!truthy(daw.running) && truthy(daw.installed) &&
               <button className={cx(quietButton, 'h-7 px-2 text-xs')} aria-label={`Open ${daw.name}`} onClick={() => launchDaw(daw)}>Open</button>}
+            {hasGuide(daw.id) &&
+              <button aria-label={`Set up ${daw.name}`} title="Setup guide" onClick={() => setGuideFor(daw)}
+                className="focus-ring flex size-7 shrink-0 items-center justify-center rounded-lg text-white/35 transition hover:bg-white/[0.06] hover:text-white">
+                <HugeiconsIcon icon={HelpCircleIcon} size={16} />
+              </button>}
           </div>;
         })}
         {daws.length === 0 && <p className="px-3 text-xs text-white/40">No DAWs reported by the agent yet.</p>}
         <p className="mt-3 px-3 text-xs leading-5 text-white/35">
-          FL Studio and Logic Pro have no import API — drag the stems from a track into them.
+          Not connecting? The ? next to a DAW explains how to start it and switch on the Gaslab DAW Plugin.
         </p>
       </nav>
       <div className="flex items-center gap-2.5 rounded-xl py-1.5 pl-3 pr-1.5">
@@ -412,7 +422,7 @@ export default function App() {
               </div>
             </div>
             <p className="mt-3 text-xs leading-5 text-white/40">
-              {importTarget ? '' : 'No DAW bridge is ready: open Ableton Live with the AI_DAW_Bridge control surface active, or drag the stems in. '}
+              {importTarget ? '' : 'No DAW bridge is ready — the ? next to your DAW in the sidebar shows how to switch it on — or drag the stems in. '}
               To export, bounce your mix in the DAW first, then pick that file — it is uploaded to this track.
             </p>
 
@@ -429,5 +439,6 @@ export default function App() {
         </section>}
       </div>
     </main>
+    {guideFor && <SetupGuide daw={guideFor} onClose={() => setGuideFor(null)} installBridges={installBridges} />}
   </div>;
 }

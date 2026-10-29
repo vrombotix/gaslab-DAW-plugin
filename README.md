@@ -1,4 +1,4 @@
-# AI DAW Prototype v0.1
+# Gaslab DAW Plugin
 
 A desktop companion for **Gaslab**: it brings the tracks you own into your DAW, and your mix back to Gaslab.
 
@@ -70,10 +70,14 @@ cd apps/desktop && npm test && cd src-tauri && cargo test
 
 To block merges that break the tests, protect `main` on GitHub (Settings > Branches): require a pull request and the CI status checks to pass.
 
+### Setup guides in the app
+
+Every DAW in the app's sidebar has a **?** button that opens its setup guide: how to start that DAW and switch on the Gaslab DAW Plugin, for macOS, Windows and Linux (opening on the current OS), with the plugin's install location and a **Reinstall** button. The guides live in `apps/desktop/src/setupGuides.tsx`.
+
 ### Ableton Live setup
 
-1. Start the desktop app once - it copies `integrations/ableton/AI_DAW_Bridge` into Live's `User Library/Remote Scripts`.
-2. Restart Live, then **Settings > Link, Tempo & MIDI > Control Surface** and pick **AI_DAW_Bridge** (no MIDI input/output needed).
+1. Start the desktop app once - it copies `integrations/ableton/Gaslab_DAW_Plugin` into Live's `User Library/Remote Scripts`.
+2. Restart Live, then **Settings > Link, Tempo & MIDI > Control Surface** and pick **Gaslab_DAW_Plugin** (no MIDI input/output needed).
 3. The Ableton card shows `bridge ready`; **Import into Ableton Live** adds one track per stem at the playhead.
 
 ---
@@ -201,10 +205,10 @@ Then:
 
 1. Open **Ardour**.
 2. Open or create a session.
-3. Go to **Edit → Scripted Actions → Manage** (wording can vary slightly by Ardour build).
-4. Open the **Editor Hooks / Callbacks** section.
-5. Refresh the available scripts if needed.
-6. Add/enable **AI DAW Import Bridge** for the session.
+3. Go to **Edit → Lua Scripts → Script Manager** (Ardour 9).
+4. Open the **Action Hooks** tab and click **New Hook**.
+5. Pick **Gaslab DAW Plugin** (not another hook with a similar name, such as an attribution bridge).
+6. Save the session - Ardour keeps the hook, as a copy, inside it.
 7. Keep that session open.
 
 The hook writes a heartbeat here:

@@ -1,4 +1,4 @@
--- AI DAW Import Bridge for REAPER (ReaScript).
+-- Gaslab DAW Plugin for REAPER (ReaScript).
 --
 -- UNVERIFIED: written against the documented ReaScript API but never run
 -- against a real REAPER install. reaper.InsertMedia()'s exact mode value

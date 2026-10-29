@@ -1,8 +1,8 @@
 ardour {
   ["type"] = "EditorHook",
-  name = "AI DAW Import Bridge",
-  author = "AI DAW Prototype",
-  description = [[Watches for AI DAW import requests and imports generated stems as separate tracks.]]
+  name = "Gaslab DAW Plugin",
+  author = "Gaslab",
+  description = [[Connects this session to the Gaslab DAW Plugin app: imports a track's stems as separate tracks at the playhead, and renders the mix when the app asks.]]
 }
 
 function signals()

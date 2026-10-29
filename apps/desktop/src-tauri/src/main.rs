@@ -63,17 +63,18 @@ async fn agent_login(app: tauri::AppHandle, email: String, password: String) -> 
     run_agent(&app, &["login".to_string(), "--email".to_string(), email], &[("AI_DAW_PASSWORD", password)]).await
 }
 
-/// Copies every DAW's bridge script into place on every startup. Best-effort
-/// and non-fatal: a DAW that's never been opened won't have a config
-/// directory yet, and that's fine - install-bridges reports per-DAW results,
-/// we just log them rather than block app startup on any of them.
+/// Copies every DAW's bridge script into place and returns the agent's
+/// per-DAW report (`install-bridges`). Runs on every startup, and again when
+/// a setup guide's "Reinstall" asks for it. Best-effort per DAW: one that has
+/// never been opened, or an unwritable folder, doesn't stop the others.
 ///
 /// The integrations/ directory is resolved here and passed explicitly via
 /// AI_DAW_INTEGRATIONS_DIR rather than letting the agent guess relative to
 /// its own path, which breaks once packaging tooling copies the binary
 /// (Tauri's own dev build copies the sidecar into target/debug/). Packaged
 /// apps use Tauri's bundled resources; dev checkouts use the repo copy.
-async fn install_bridges(app: tauri::AppHandle) {
+#[tauri::command]
+async fn agent_install_bridges(app: tauri::AppHandle) -> Result<String, String> {
     let dev_integrations = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../integrations");
     let integrations_dir = app
         .path()
@@ -84,10 +85,7 @@ async fn install_bridges(app: tauri::AppHandle) {
         .unwrap_or(dev_integrations);
 
     let envs = [("AI_DAW_INTEGRATIONS_DIR", integrations_dir.to_string_lossy().into_owned())];
-    match run_agent(&app, &["install-bridges".to_string()], &envs).await {
-        Ok(stdout) => println!("install-bridges (from {}): {}", integrations_dir.display(), stdout.trim()),
-        Err(e) => eprintln!("install-bridges failed: {e}"),
-    }
+    run_agent(&app, &["install-bridges".to_string()], &envs).await
 }
 
 fn main() {
@@ -97,11 +95,17 @@ fn main() {
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_drag::init())
         .plugin(tauri_plugin_dialog::init())
-        .invoke_handler(tauri::generate_handler![agent_call, agent_login])
+        .invoke_handler(tauri::generate_handler![agent_call, agent_login, agent_install_bridges])
         .setup(|app| {
-            tauri::async_runtime::spawn(install_bridges(app.handle().clone()));
+            let handle = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                match agent_install_bridges(handle).await {
+                    Ok(report) => println!("install-bridges: {}", report.trim()),
+                    Err(e) => eprintln!("install-bridges failed: {e}"),
+                }
+            });
             Ok(())
         })
         .run(tauri::generate_context!())
-        .expect("error while running AI DAW desktop application");
+        .expect("error while running Gaslab DAW Plugin");
 }

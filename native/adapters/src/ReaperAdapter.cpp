@@ -135,7 +135,7 @@ bool ReaperAdapter::queueImport(const Generation& generation, std::string& error
     return false;
   }
   if (!state.bridgeReady) {
-    error = "REAPER is running, but the AI DAW Import Bridge script is not active "
+    error = "REAPER is running, but the Gaslab DAW Plugin script is not active "
             "(start the AI DAW app once so it installs the bridge, then restart REAPER).";
     return false;
   }

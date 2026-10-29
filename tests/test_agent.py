@@ -109,7 +109,7 @@ class AgentTestCase(unittest.TestCase):
         self.home = Path(tempfile.mkdtemp())
         self.addCleanup(shutil.rmtree, self.home, ignore_errors=True)
         self.env = dict(os.environ, HOME=str(self.home), USERPROFILE=str(self.home),
-                        APPDATA=str(self.home / "AppData"),
+                        APPDATA=str(self.home / "AppData"), LOCALAPPDATA=str(self.home / "AppData" / "Local"),
                         AI_DAW_INTEGRATIONS_DIR=str(ROOT / "integrations"))
 
     def agent(self, *args, password=None):
@@ -227,7 +227,7 @@ class TestCli(AgentTestCase):
         installed = self.install()
         data_dir = Path(self.agent("health")["data_dir"])
         for daw, script in [("ardour", installed["ardour"]), ("reaper", installed["reaper"]),
-                            ("ableton", installed["ableton"] / "AI_DAW_Bridge.py")]:
+                            ("ableton", installed["ableton"] / "daw_plugin.py")]:
             text = script.read_text()
             self.assertNotIn("@AI_DAW_BRIDGE_DIR@", text)
             self.assertIn((data_dir / daw).as_posix(), text)
@@ -494,7 +494,7 @@ class TestBridges(AgentTestCase):
                             "_Framework.ControlSurface": control_surface})
         sys.path.insert(0, str(script_dir.parent))
         self.addCleanup(sys.path.remove, str(script_dir.parent))
-        bridge = importlib.import_module("AI_DAW_Bridge").AI_DAW_Bridge(None)
+        bridge = importlib.import_module("Gaslab_DAW_Plugin").GaslabDAWPlugin(None)
 
         def tick(fail=False):
             failing[0] = fail

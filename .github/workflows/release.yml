@@ -49,7 +49,7 @@ jobs:
         with:
           projectPath: apps/desktop
           tagName: ${{ github.ref_name }}
-          releaseName: AI DAW Prototype ${{ github.ref_name }}
+          releaseName: Gaslab DAW Plugin ${{ github.ref_name }}
           releaseBody: Installers for macOS (Apple Silicon and Intel), Windows and Linux.
           releaseDraft: true
           args: --target ${{ matrix.target }}

@@ -138,7 +138,8 @@ bool ArdourAdapter::queueImport(const Generation& generation, std::string& error
     return false;
   }
   if (!state.bridgeReady) {
-    error = "Ardour is running, but the AI DAW Import Bridge Lua hook is not active in this session.";
+    error = "Ardour is running, but the Gaslab DAW Plugin hook is not active in this session "
+            "(Edit > Lua Scripts > Script Manager > Action Hooks > New Hook).";
     return false;
   }
   if (generation.assets.empty()) {

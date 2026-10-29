@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "AI DAW Prototype",
+  "productName": "Gaslab DAW Plugin",
   "version": "0.1.0",
   "identifier": "dev.aidaw.prototype",
   "build": {
@@ -11,7 +11,7 @@
   },
   "app": {
     "windows": [{
-      "title": "Gaslab DAW",
+      "title": "Gaslab DAW Plugin",
       "width": 1180,
       "height": 820,
       "minWidth": 900,

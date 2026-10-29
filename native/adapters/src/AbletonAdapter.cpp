@@ -95,7 +95,7 @@ bool AbletonAdapter::queueImport(const Generation& generation, std::string& erro
     return false;
   }
   if (!state.bridgeReady) {
-    error = "Live is running, but the AI_DAW_Bridge Control Surface is not active "
+    error = "Live is running, but the Gaslab_DAW_Plugin control surface is not active "
             "(needs Live 12.0.5+; select it once under Settings > Link, Tempo & MIDI > Control Surface).";
     return false;
   }

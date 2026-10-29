@@ -53,16 +53,16 @@ def write_result(path, ok, message):
         pass
 
 
-class AI_DAW_Bridge(ControlSurface):
+class GaslabDAWPlugin(ControlSurface):
     def __init__(self, c_instance):
-        super(AI_DAW_Bridge, self).__init__(c_instance)
+        super(GaslabDAWPlugin, self).__init__(c_instance)
         self._last_generation_id = ""
         self._last_poll = 0.0
 
     # Live calls update_display() roughly every 100 ms on every active
     # Control Surface, which makes it the polling timer.
     def update_display(self):
-        super(AI_DAW_Bridge, self).update_display()
+        super(GaslabDAWPlugin, self).update_display()
         now = time.time()
         if now - self._last_poll < POLL_INTERVAL_SECONDS:
             return

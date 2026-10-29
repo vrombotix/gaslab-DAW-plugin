@@ -47,6 +47,7 @@ fs::path freshHome() {
   setEnv("HOME", home.string());
   setEnv("USERPROFILE", home.string());
   setEnv("APPDATA", (home / "AppData").string());
+  setEnv("LOCALAPPDATA", (home / "AppData" / "Local").string());
   return home;
 }
 
